@@ -1,0 +1,56 @@
+{
+  "name": "gemi-pet",
+  "version": "1.1.0",
+  "description": "Gemi Pets — Desktop pets com Gemini e OpenAI",
+  "main": "main.js",
+  "scripts": {
+    "start": "node start-pet.js",
+    "lint": "eslint .",
+    "test": "node --test test/*.test.js",
+    "test:renderer": "node scripts/test-renderer.js",
+    "build:native": "node scripts/build-native.js",
+    "predist": "npm run build:native",
+    "dist": "electron-builder --win portable",
+    "check": "npm run lint && npm test && npm run test:renderer"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "44.9.2",
+    "electron-builder": "26.15.3",
+    "eslint": "10.13.0",
+    "@eslint/js": "10.0.1",
+    "globals": "17.13.0"
+  },
+  "build": {
+    "appId": "com.teixeira.gemipet",
+    "productName": "Gemi Pets",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "assets/icon.ico"
+    },
+    "asarUnpack": [
+      "watcher/**/*"
+    ],
+    "portable": {
+      "artifactName": "Gemi Pets.exe"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*.js",
+      "renderer/**/*",
+      "watcher/window-watcher.exe",
+      "assets/icon.ico",
+      "LICENSE",
+      "package.json"
+    ],
+    "npmRebuild": false
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

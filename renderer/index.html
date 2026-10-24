@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <meta name="description" content="Gemi Pets — sua pequena equipe de companhia e IA na área de trabalho." />
+  <title>Gemi Pets</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <h1 class="sr-only">Gemi Pets — companheiros na sua área de trabalho</h1>
+  <canvas id="stage" aria-label="Pets animados na área de trabalho"></canvas>
+
+  <!-- HUD unificado ao passar mouse sobre um pet -->
+  <div id="hud" class="hud" role="toolbar" aria-label="Ações do Pet">
+    <div class="hud-top">
+      <div class="hud-pet-badge">
+        <span id="hud-pet-icon">🤖</span>
+        <strong id="hud-pet-name">Gemi</strong>
+      </div>
+      <button id="btn-skin-picker" type="button" class="badge-btn" title="Trocar aparência" aria-label="Trocar aparência do pet" aria-haspopup="dialog">
+        🎭 <span id="hud-skin-name">Robô</span> ▾
+      </button>
+    </div>
+
+    <p id="hud-display-info" class="hud-display-info" aria-label="Monitor do pet" hidden></p>
+
+    <!-- Seletor de Quantidade de Personagens na Taskbar -->
+    <div class="hud-pet-count-row">
+      <span class="hud-count-label">Sua equipe</span>
+      <div class="pet-count-pills">
+        <button type="button" class="btn-pet-count" data-count="1" title="1 Pet: Apenas Gemi" aria-label="1 Pet: Apenas Gemi">1</button>
+        <button type="button" class="btn-pet-count active" data-count="2" title="2 Pets: Gemi & Codexy" aria-label="2 Pets: Gemi & Codexy">2</button>
+        <button type="button" class="btn-pet-count" data-count="3" title="3 Pets: Gemi, Codexy & Raposo" aria-label="3 Pets: Gemi, Codexy & Raposo">3</button>
+        <button type="button" class="btn-pet-count" data-count="4" title="4 Pets: Equipe Completa (+ Sparky)" aria-label="4 Pets: Equipe Completa (+ Sparky)">4</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat" title="Comida"><span aria-label="Comida">🍎</span><i><b id="bar-food"></b></i></div>
+      <div class="stat" title="Diversão"><span aria-label="Diversão">🎈</span><i><b id="bar-fun"></b></i></div>
+      <div class="stat" title="Energia"><span aria-label="Energia">⚡</span><i><b id="bar-energy"></b></i></div>
+    </div>
+    <div class="actions">
+      <button id="act-games" type="button" title="Brincadeiras e mini-jogos" aria-label="Brincadeiras e mini-jogos">🎮<span>Brincar</span></button>
+      <button id="act-feed" type="button" title="Dar um petisco" aria-label="Dar um petisco">🍎<span>Comer</span></button>
+      <button id="act-sleep" type="button" title="Tirar uma soneca" aria-label="Tirar uma soneca"><span id="act-sleep-icon">😴</span><span id="act-sleep-label">Dormir</span></button>
+      <button id="act-hide" type="button" title="Brincar de esconde-esconde" aria-label="Brincar de esconde-esconde">🙈<span>Esconder</span></button>
+      <button id="act-chat" type="button" title="Abrir bate-papo" aria-label="Abrir bate-papo">💬<span>Chat</span></button>
+      <button id="act-sound" type="button" title="Ativar ou silenciar sons" aria-label="Ativar ou silenciar sons"><span id="hud-sound-icon">🔊</span><span id="act-sound-label">Som</span></button>
+      <button id="act-monitor" type="button" title="Mover o pet para o próximo monitor" aria-label="Mover o pet para o próximo monitor" hidden>🖥️<span>Outra tela</span></button>
+    </div>
+  </div>
+
+  <!-- Modal seletor de Jogos & Brincadeiras -->
+  <div id="games-modal" class="games-modal hidden" role="dialog" aria-labelledby="games-heading">
+    <div class="games-modal-head">
+      <div><p class="panel-eyebrow">Um tempo para brincar</p><h3 id="games-heading">Escolha a brincadeira</h3></div>
+      <button id="btn-close-games" type="button" aria-label="Fechar brincadeiras" title="Fechar">✕</button>
+    </div>
+    <div class="games-grid">
+      <button class="game-card" data-game="volley" type="button">
+        <span class="game-emoji">🏐</span>
+        <div>
+          <strong>Vôlei</strong>
+          <small>Seu mouse é a raquete contra os pets</small>
+        </div>
+      </button>
+      <button class="game-card" data-game="hideseek" type="button">
+        <span class="game-emoji">🙈</span>
+        <div>
+          <strong>Esconde-Esconde</strong>
+          <small>Eles se escondem na taskbar; ache-os com o cursor!</small>
+        </div>
+      </button>
+      <button class="game-card" data-game="tag" type="button">
+        <span class="game-emoji">🏃</span>
+        <div>
+          <strong>Pega-Pega</strong>
+          <small>Perseguição frenética na taskbar</small>
+        </div>
+      </button>
+      <button class="game-card" data-game="keepup" type="button">
+        <span class="game-emoji">⚽</span>
+        <div>
+          <strong>Embaixadinhas</strong>
+          <small>Eles tocam a bola; ajude a não deixar cair</small>
+        </div>
+      </button>
+      <button class="game-card" data-game="jokenpo" type="button">
+        <span class="game-emoji">✌️</span>
+        <div>
+          <strong>Jokenpô</strong>
+          <small>Pedra, Papel e Tesoura em melhor de 3</small>
+        </div>
+      </button>
+      <button class="game-card" data-game="dance" type="button">
+        <span class="game-emoji">🎵</span>
+        <div>
+          <strong>Dancinha</strong>
+          <small>Coreografia animada e sincronizada</small>
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <!-- Modal seletor de skin -->
+  <div id="skin-modal" class="skin-modal hidden" role="dialog" aria-labelledby="skin-heading">
+    <div class="skin-modal-head">
+      <div><p class="panel-eyebrow">Um novo visual</p><h3 id="skin-heading">Do seu jeito</h3></div>
+      <button id="btn-close-skin" type="button" aria-label="Fechar aparências" title="Fechar">✕</button>
+    </div>
+    <div class="skin-grid">
+      <button class="skin-opt" data-skin="robot" type="button">
+        <span class="skin-emoji">🤖</span>
+        <strong>Robô</strong>
+        <small>Telinha retrô & LED</small>
+      </button>
+      <button class="skin-opt" data-skin="cat" type="button">
+        <span class="skin-emoji">🐱</span>
+        <strong>Gatinho</strong>
+        <small>Orelhinhas & rabo</small>
+      </button>
+      <button class="skin-opt" data-skin="ghost" type="button">
+        <span class="skin-emoji">👻</span>
+        <strong>Fantasma</strong>
+        <small>Flutuante & espectral</small>
+      </button>
+      <button class="skin-opt" data-skin="slime" type="button">
+        <span class="skin-emoji">🟢</span>
+        <strong>Slime</strong>
+        <small>Gota saltitante</small>
+      </button>
+      <button class="skin-opt" data-skin="fox" type="button">
+        <span class="skin-emoji">🦊</span>
+        <strong>Raposa</strong>
+        <small>Cauda felpuda</small>
+      </button>
+      <button class="skin-opt" data-skin="duck" type="button">
+        <span class="skin-emoji">🦆</span>
+        <strong>Pato</strong>
+        <small>Bico e asinhas</small>
+      </button>
+    </div>
+  </div>
+
+  <!-- Chat do Gemi (Gemini) -->
+  <section id="chat-gemi" class="chat chat-gemini" aria-label="Chat com o Gemi">
+    <div class="chat-tail"></div>
+    <header class="chat-head">
+      <div class="chat-title">
+        <span class="gem-star"></span>
+        <div>
+          <strong>Gemi</strong>
+          <small id="gemi-status" role="status">Gemini Flash • Pronto ✨</small>
+        </div>
+      </div>
+      <div class="chat-actions">
+        <button class="btn-sound" type="button" title="Ativar/silenciar sons" aria-label="Ativar/silenciar sons">🔊</button>
+        <button class="btn-clear" type="button" title="Limpar conversa" aria-label="Limpar conversa">⟲</button>
+        <button class="btn-key" type="button" title="Chave da API" aria-label="Chave da API">🔑</button>
+        <button class="btn-close" type="button" title="Fechar (Esc)" aria-label="Fechar (Esc)">✕</button>
+      </div>
+    </header>
+
+    <div class="chat-setup hidden">
+      <h2>Conectar ao Gemini ✨</h2>
+      <p>Cole sua chave da API do Gemini. Crie uma grátis em <a href="#" class="link-ai-studio">Google AI Studio</a>.</p>
+      <input aria-label="Chave da API" class="key-input" type="password" placeholder="AIza..." autocomplete="off" spellcheck="false" />
+      <div class="setup-row">
+        <button type="button" class="ghost btn-cancel-key">Cancelar</button>
+        <button type="button" class="primary btn-save-key">Salvar chave</button>
+      </div>
+    </div>
+
+    <!-- Barra de Telemetria e Ferramentas -->
+    <div class="chat-toolbar">
+      <div class="chat-telemetry" id="gemi-telemetry">
+        <span class="tele-item" title="Tokens da última resposta">🪙 <strong class="tele-tokens-val">0</strong> tok</span>
+        <span class="tele-item" title="Tempo da tarefa / resposta">⏱️ <strong class="tele-time-val">0.0s</strong></span>
+        <span class="tele-item tele-speed-box" title="Velocidade de geração">⚡ <strong class="tele-speed-val">--</strong> t/s</span>
+      </div>
+      <div class="tool-pills">
+        <button type="button" class="tool-pill btn-call-codex" title="Delega a tarefa ao Codex (OpenAI) no PC" aria-label="Delega a tarefa ao Codex (OpenAI) no PC">⚡ Codex</button>
+        <button type="button" class="tool-pill btn-call-argon" title="Abre no Antigravity IDE (Argon)" aria-label="Abre no Antigravity IDE (Argon)">🚀 Argon</button>
+      </div>
+    </div>
+
+    <div class="chat-log" role="log" aria-label="Mensagens da conversa" aria-live="polite" aria-relevant="additions"></div>
+
+    <form class="chat-form" aria-label="Enviar mensagem">
+      <textarea aria-label="Mensagem para o pet" rows="1" placeholder="Converse com o Gemi…"></textarea>
+      <button class="send" type="submit" title="Enviar" aria-label="Enviar">➤</button>
+      <span class="composer-hint">Enter para enviar · Shift + Enter para nova linha</span>
+    </form>
+  </section>
+
+  <!-- Chat do Codexy (ChatGPT / Codex) -->
+  <section id="chat-codex" class="chat chat-codex" aria-label="Chat com o Codexy">
+    <div class="chat-tail"></div>
+    <header class="chat-head">
+      <div class="chat-title">
+        <span class="codex-spiral"></span>
+        <div>
+          <strong>Codexy</strong>
+          <small id="codex-status" role="status">Codex / ChatGPT • Pronto ⚡</small>
+        </div>
+      </div>
+      <div class="chat-actions">
+        <button class="btn-sound" type="button" title="Ativar/silenciar sons" aria-label="Ativar/silenciar sons">🔊</button>
+        <button class="btn-clear" type="button" title="Limpar conversa" aria-label="Limpar conversa">⟲</button>
+        <button class="btn-key" type="button" title="Configurar Chaves" aria-label="Configurar Chaves">🔑</button>
+        <button class="btn-close" type="button" title="Fechar (Esc)" aria-label="Fechar (Esc)">✕</button>
+      </div>
+    </header>
+
+    <div class="chat-setup hidden">
+      <h2>ChatGPT & OpenAI 🤖</h2>
+      <p>O Codexy roda nativamente com Gemini e ferramentas locais. Se quiser ativar sua chave da OpenAI:</p>
+      <input aria-label="Chave da API" class="key-input" type="password" placeholder="sk-proj-..." autocomplete="off" spellcheck="false" />
+      <div class="setup-row">
+        <button type="button" class="ghost btn-cancel-key">Cancelar</button>
+        <button type="button" class="primary btn-save-key">Salvar chave</button>
+      </div>
+    </div>
+
+    <!-- Barra de Telemetria e Ferramentas -->
+    <div class="chat-toolbar">
+      <div class="chat-telemetry" id="codex-telemetry">
+        <span class="tele-item" title="Tokens da última resposta">🪙 <strong class="tele-tokens-val">0</strong> tok</span>
+        <span class="tele-item" title="Tempo da tarefa / resposta">⏱️ <strong class="tele-time-val">0.0s</strong></span>
+        <span class="tele-item tele-speed-box" title="Velocidade de geração">⚡ <strong class="tele-speed-val">--</strong> t/s</span>
+      </div>
+      <div class="tool-pills">
+        <button type="button" class="tool-pill btn-call-codex" title="Executar tarefa com o Codex da OpenAI localmente" aria-label="Executar tarefa com o Codex da OpenAI localmente">⚡ Codex</button>
+        <button type="button" class="tool-pill btn-call-argon" title="Mandar para o Antigravity IDE (Argon)" aria-label="Mandar para o Antigravity IDE (Argon)">🚀 Argon</button>
+      </div>
+    </div>
+
+    <div class="chat-log" role="log" aria-label="Mensagens da conversa" aria-live="polite" aria-relevant="additions"></div>
+
+    <form class="chat-form" aria-label="Enviar mensagem">
+      <textarea aria-label="Mensagem para o pet" rows="1" placeholder="Converse com o Codexy…"></textarea>
+      <button class="send" type="submit" title="Enviar" aria-label="Enviar">➤</button>
+      <span class="composer-hint">Enter para enviar · Shift + Enter para nova linha</span>
+    </form>
+  </section>
+
+  <!-- Chat do Raposo (Pet 3) -->
+  <section id="chat-claude" class="chat chat-claude" aria-label="Chat com o Raposo">
+    <div class="chat-tail"></div>
+    <header class="chat-head">
+      <div class="chat-title">
+        <span class="claude-icon">🦊</span>
+        <div>
+          <strong>Raposo</strong>
+          <small id="claude-status" role="status">Gemini • Raposo 🦊</small>
+        </div>
+      </div>
+      <div class="chat-actions">
+        <button class="btn-sound" type="button" title="Ativar/silenciar sons" aria-label="Ativar/silenciar sons">🔊</button>
+        <button class="btn-clear" type="button" title="Limpar conversa" aria-label="Limpar conversa">⟲</button>
+        <button class="btn-key" type="button" title="Chave da API" aria-label="Chave da API">🔑</button>
+        <button class="btn-close" type="button" title="Fechar (Esc)" aria-label="Fechar (Esc)">✕</button>
+      </div>
+    </header>
+
+    <div class="chat-setup hidden">
+      <h2>Conectar Raposo ✨</h2>
+      <p>O Raposo é uma persona do Gemini. Para atualizar a chave:</p>
+      <input aria-label="Chave da API" class="key-input" type="password" placeholder="AIza..." autocomplete="off" spellcheck="false" />
+      <div class="setup-row">
+        <button type="button" class="ghost btn-cancel-key">Cancelar</button>
+        <button type="button" class="primary btn-save-key">Salvar chave</button>
+      </div>
+    </div>
+
+    <div class="chat-toolbar">
+      <div class="chat-telemetry" id="claude-telemetry">
+        <span class="tele-item" title="Tokens da última resposta">🪙 <strong class="tele-tokens-val">0</strong> tok</span>
+        <span class="tele-item" title="Tempo da tarefa / resposta">⏱️ <strong class="tele-time-val">0.0s</strong></span>
+        <span class="tele-item tele-speed-box" title="Velocidade de geração">⚡ <strong class="tele-speed-val">--</strong> t/s</span>
+      </div>
+      <div class="tool-pills">
+        <button type="button" class="tool-pill btn-call-codex" title="Delega a tarefa ao Codex" aria-label="Delega a tarefa ao Codex">⚡ Codex</button>
+        <button type="button" class="tool-pill btn-call-argon" title="Abre no Antigravity IDE" aria-label="Abre no Antigravity IDE">🚀 Argon</button>
+      </div>
+    </div>
+
+    <div class="chat-log" role="log" aria-label="Mensagens da conversa" aria-live="polite" aria-relevant="additions"></div>
+
+    <form class="chat-form" aria-label="Enviar mensagem">
+      <textarea aria-label="Mensagem para o pet" rows="1" placeholder="Converse com o Raposo…"></textarea>
+      <button class="send" type="submit" title="Enviar" aria-label="Enviar">➤</button>
+      <span class="composer-hint">Enter para enviar · Shift + Enter para nova linha</span>
+    </form>
+  </section>
+
+  <!-- Chat do Sparky (Pet 4) -->
+  <section id="chat-sparky" class="chat chat-sparky" aria-label="Chat com o Sparky">
+    <div class="chat-tail"></div>
+    <header class="chat-head">
+      <div class="chat-title">
+        <span class="sparky-icon">🌟</span>
+        <div>
+          <strong>Sparky</strong>
+          <small id="sparky-status" role="status">Gemini • Sparky 🌟</small>
+        </div>
+      </div>
+      <div class="chat-actions">
+        <button class="btn-sound" type="button" title="Ativar/silenciar sons" aria-label="Ativar/silenciar sons">🔊</button>
+        <button class="btn-clear" type="button" title="Limpar conversa" aria-label="Limpar conversa">⟲</button>
+        <button class="btn-key" type="button" title="Chave da API" aria-label="Chave da API">🔑</button>
+        <button class="btn-close" type="button" title="Fechar (Esc)" aria-label="Fechar (Esc)">✕</button>
+      </div>
+    </header>
+
+    <div class="chat-setup hidden">
+      <h2>Conectar Sparky 🌟</h2>
+      <p>O Sparky é uma persona do Gemini. Configure sua chave:</p>
+      <input aria-label="Chave da API" class="key-input" type="password" placeholder="AIza..." autocomplete="off" spellcheck="false" />
+      <div class="setup-row">
+        <button type="button" class="ghost btn-cancel-key">Cancelar</button>
+        <button type="button" class="primary btn-save-key">Salvar chave</button>
+      </div>
+    </div>
+
+    <div class="chat-toolbar">
+      <div class="chat-telemetry" id="sparky-telemetry">
+        <span class="tele-item" title="Tokens da última resposta">🪙 <strong class="tele-tokens-val">0</strong> tok</span>
+        <span class="tele-item" title="Tempo da tarefa / resposta">⏱️ <strong class="tele-time-val">0.0s</strong></span>
+        <span class="tele-item tele-speed-box" title="Velocidade de geração">⚡ <strong class="tele-speed-val">--</strong> t/s</span>
+      </div>
+      <div class="tool-pills">
+        <button type="button" class="tool-pill btn-call-codex" title="Delega a tarefa ao Codex" aria-label="Delega a tarefa ao Codex">⚡ Codex</button>
+        <button type="button" class="tool-pill btn-call-argon" title="Abre no Antigravity IDE" aria-label="Abre no Antigravity IDE">🚀 Argon</button>
+      </div>
+    </div>
+
+    <div class="chat-log" role="log" aria-label="Mensagens da conversa" aria-live="polite" aria-relevant="additions"></div>
+
+    <form class="chat-form" aria-label="Enviar mensagem">
+      <textarea aria-label="Mensagem para o pet" rows="1" placeholder="Converse com o Sparky…"></textarea>
+      <button class="send" type="submit" title="Enviar" aria-label="Enviar">➤</button>
+      <span class="composer-hint">Enter para enviar · Shift + Enter para nova linha</span>
+    </form>
+  </section>
+
+  <!-- Placar Geral dos Jogos (Vôlei / Embaixadinhas / Jokenpô / Esconde-esconde) -->
+  <div id="score" class="score">
+    <div class="score-main">
+      <div class="side"><small id="score-lbl-left">Você</small><strong id="score-left">0</strong></div>
+      <span class="vs" id="score-vs">×</span>
+      <div class="side"><small id="score-lbl-right">Pets</small><strong id="score-right">0</strong></div>
+    </div>
+    <p id="score-hint">Seu mouse é a mão: encoste na bola pra rebater! Primeiro a 7 vence.</p>
+    <button id="score-exit" type="button">Encerrar (Esc)</button>
+  </div>
+
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>
