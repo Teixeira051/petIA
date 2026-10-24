@@ -17,7 +17,8 @@ ipcMain.on('chat-send', () => { errors.push('Não deveria haver chamadas de rede
 ipcMain.on('tool-run', (event, data) => {
   directCalls++;
   event.sender.send('tool-request', data);
-  event.sender.send('tool-result', { ...data, ok: false, canceled: true, text: 'Cancelado no teste.' });
+  // Exercise asynchronous IPC delivery rather than assuming a fixed UI delay.
+  setTimeout(() => event.sender.send('tool-result', { ...data, ok: false, canceled: true, text: 'Cancelado no teste.' }), 200);
 });
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1200, height: 700, webPreferences: { preload: path.join(__dirname, '../preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
@@ -67,9 +68,17 @@ app.whenReady().then(async () => {
       const escaped = chat.renderMarkdown('<img src=x onerror="alert(1)"> **ok**');
       if (escaped.includes('<img') || !escaped.includes('<strong>ok</strong>')) throw Error('Falha ao escapar HTML');
       chat.openPetChat('gemi');
+      const toolFinished = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(Error('Resultado da ferramenta não chegou pelo IPC')), 5000);
+        window.gemi.on('tool-result', (data) => {
+          if (data.petId !== 'gemi') return;
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
       chat.executeToolDirect('gemi', 'chamar_codex', '<img src=x> apenas teste');
-      await pause(100);
-      const card = document.querySelector('.tool-card');
+      await toolFinished;
+      const card = chat.getChatElements('gemi').log.querySelector('.tool-card');
       if (!card || card.querySelector('img') || !card.textContent.includes('Cancelado')) throw Error('Card de ferramenta incorreto');
       if (core.world.frameCount < 2) throw Error('Animação não iniciou');
       return { pets: core.pets.length, frames: core.world.frameCount, games: 6, skins: 6 };
