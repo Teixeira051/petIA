@@ -10,6 +10,9 @@ const { createLogger } = require('./lib/logger');
 const { createTrustedIpc, hardenWebContents, PET_IDS, SKINS, validId, isRecord, cleanSettings, cleanState, validChat, allowedExternalURL } = require('./lib/security');
 const { createToolExecutor } = require('./lib/tool-executor');
 const { describeDisplays, petAssignments, viewportFor } = require('./lib/displays');
+const { createAIProviders } = require('./lib/ai-providers');
+const { LIMITS, compactHistory, shouldOfferTools, conciseSystemPrompt } = require('./lib/chat-policy');
+const { createCodexRunner } = require('./lib/codex-runner');
 
 let config = {};
 const logFile = path.join(os.tmpdir(), 'gemi-boot.log');
@@ -56,8 +59,8 @@ const DEFAULT_SETTINGS = {
   defaultFolder: '',
 };
 
-// Ordem de tentativa: se um modelo estiver no limite (429) ou indisponível (404/5xx), tenta o próximo
-const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
+// Alternativas apenas quando o modelo não existe; cotas e falhas não geram novas chamadas.
+const GEMINI_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
 
 // ---------- Config ----------
 function loadConfig() {
@@ -370,372 +373,52 @@ function createTray(dataUrl) {
   tray.on('right-click', () => tray.setContextMenu(buildTrayMenu()));
 }
 
-// ---------- IA: prompts e ferramentas ----------
-const PERSONAS = {
-  gemi: 'Você é o Gemi ✨, um robozinho amigável e esperto que mora em cima da barra de tarefas do Windows do usuário. Seu cérebro principal é o Gemini (Google).',
-  codex: 'Você é o Codexy ⚡, um gatinho/mascote ágil e técnico que mora em cima da barra de tarefas do Windows. Você é especialista em desenvolvimento, terminal e ferramentas como o Codex da OpenAI.',
-  claude: 'Você é o Raposo 🦊, uma raposinha charmosa, atenciosa e muito culta que mora na barra de tarefas. Você se destaca por explicações detalhadas, lógica elegante e conselhos precisos.',
-  sparky: 'Você é o Sparky 🌟, uma gotinha cósmica entusiasmada e criativa que mora na barra de tarefas. Você vibra com soluções rápidas, design moderno e comemora cada linha de código funcional!',
-};
-
-function systemPrompt(petId, s = {}) {
-  const p = PERSONAS[petId] || PERSONAS.gemi;
-  return [
-    p,
-    'Responda sempre em português do Brasil, de jeito simpático, solícito e direto ao ponto. A janela de chat é compacta: prefira respostas concisas e práticas (até ~7 linhas) a não ser que o usuário peça uma resposta detalhada ou código completo. Use markdown e blocos de código com destaque.',
-    'Você possui duas ferramentas poderosas: chamar_codex (agente autônomo da OpenAI que lê/edita arquivos locais e roda comandos no terminal do PC) e abrir_antigravity (abre o Antigravity IDE, também chamado de "argon", e entrega uma tarefa para o agente).',
-    'Converse livremente e tire dúvidas de programação, scripts e ideias. Só chame ferramentas quando o usuário pedir (ex.: "/codex", "/argon", "chama o codex") ou quando ele solicitar manipulação de arquivos ou execução de comandos no computador dele.',
-    'Quando uma ferramenta responder, faça um breve resumo dos resultados obtidos.',
-    `Seu humor agora: comida ${Math.round(s.food ?? 80)}%, diversão ${Math.round(s.fun ?? 80)}%, energia ${Math.round(s.energy ?? 80)}%.`,
-  ].join('\n');
-}
-
-const TOOLS = [{
-  functionDeclarations: [
-    {
-      name: 'chamar_codex',
-      description: 'Delega uma tarefa de programação ao Codex (agente da OpenAI) que roda localmente no PC do usuário, podendo ler/editar arquivos e executar comandos na pasta indicada. Use para trabalho real em projetos/arquivos ou quando o usuário pedir o Codex.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          tarefa: { type: 'STRING', description: 'Instrução completa e autossuficiente para o Codex.' },
-          pasta: { type: 'STRING', description: 'Caminho absoluto da pasta do projeto (opcional).' },
-        },
-        required: ['tarefa'],
-      },
-    },
-    {
-      name: 'abrir_antigravity',
-      description: 'Abre o Antigravity IDE (também chamado de "argon" pelo usuário) com o chat do agente já recebendo a tarefa. Use quando o usuário pedir para mandar algo para o Antigravity/argon ou para tarefas grandes que ele queira acompanhar no IDE.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          tarefa: { type: 'STRING', description: 'Instrução completa para o agente do Antigravity.' },
-          pasta: { type: 'STRING', description: 'Caminho absoluto da pasta do projeto (opcional).' },
-        },
-        required: ['tarefa'],
-      },
-    },
-  ],
-}];
-
-// Garante que o histórico começa com uma mensagem de texto do usuário
-function trimHistory(history) {
-  let h = Array.isArray(history) ? history.slice(-30) : [];
-  while (h.length && !(h[0].role === 'user' && h[0].parts?.some((p) => typeof p.text === 'string'))) h.shift();
-  return h;
-}
-
-function friendlyGeminiError(e) {
-  const m = e.message || '';
-  if (e.status === 429) return 'O Gemini atingiu o limite de uso gratuito por agora. Espere alguns segundos e tente de novo 🙏';
-  if (e.status === 400 && /api key/i.test(m)) return 'A chave do Gemini parece inválida. Clique em 🔑 e cole uma nova.';
-  if (e.status === 403) return 'A chave do Gemini não tem permissão. Gere outra no Google AI Studio (🔑).';
-  if (/fetch failed|ENOTFOUND|network/i.test(m)) return 'Sem conexão com a internet 📡';
-  return m || 'Erro desconhecido';
-}
-
-// Faz uma chamada em streaming e devolve as "parts" da resposta do modelo e estatísticas de tokens
-async function geminiStreamOnce(model, body, key, signal, onText) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
-    method: 'POST',
-    signal,
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let msg = '';
-    try { const j = await res.json(); msg = j.error?.message || ''; } catch {}
-    const err = new Error(msg || `Erro ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
-
-  const parts = [];
-  let usage = null;
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      let j;
-      try { j = JSON.parse(line.slice(5).trim()); } catch { continue; }
-      if (j.usageMetadata) {
-        usage = {
-          promptTokens: j.usageMetadata.promptTokenCount || 0,
-          completionTokens: j.usageMetadata.candidatesTokenCount || 0,
-          totalTokens: j.usageMetadata.totalTokenCount || 0,
-          thoughtsTokens: j.usageMetadata.thoughtsTokenCount || 0,
-        };
-      }
-      for (const p of j.candidates?.[0]?.content?.parts || []) {
-        if (p.thought) continue;
-        if (p.functionCall) {
-          parts.push({ functionCall: p.functionCall, ...(p.thoughtSignature ? { thoughtSignature: p.thoughtSignature } : {}) });
-        } else if (typeof p.text === 'string') {
-          if (p.text) onText(p.text);
-          const last = parts[parts.length - 1];
-          if (last && typeof last.text === 'string') {
-            last.text += p.text;
-            if (p.thoughtSignature) last.thoughtSignature = p.thoughtSignature;
-          } else {
-            parts.push({ text: p.text, ...(p.thoughtSignature ? { thoughtSignature: p.thoughtSignature } : {}) });
-          }
-        } else if (p.thoughtSignature) {
-          const last = parts[parts.length - 1];
-          if (last) last.thoughtSignature = p.thoughtSignature;
-        }
-      }
-    }
-  }
-  return { parts, usage };
-}
-
-async function geminiChat(sender, { petId, id, history, state }) {
-  const emit = (ch, data = {}) => {
-    if (ch === 'chat-done' && !data.aborted && data.turns) sessionHistory.set(petId, [...trimHistory(history), ...data.turns].slice(-30));
-    if (!sender.isDestroyed()) sender.send(ch, { petId, id, ...data });
-  };
-  const key = geminiApiKey();
+// ---------- Conversas e orçamento de tokens ----------
+async function providerChat(sender, { petId, id, history, state }, provider, key) {
+  const emit = (channel, data = {}) => { if (!sender.isDestroyed()) sender.send(channel, { petId, id, ...data }); };
   if (!key) { emit('chat-error', { message: 'NO_KEY' }); return; }
-
   const startTime = Date.now();
-  const ac = new AbortController();
-  ac.owner = sender;
-  ac.petId = petId;
-  controllers.set(id, ac);
-  const contents = trimHistory(history);
-  const turns = [];
-  const models = [...new Set([config.geminiModel, ...GEMINI_MODELS].filter(Boolean))];
-  let model = null;
-  let finalUsage = null;
-
+  const controller = new AbortController();
+  controller.owner = sender;
+  controller.petId = petId;
+  controllers.set(id, controller);
   try {
-    for (let round = 0; round < 4; round++) {
-      const body = {
-        systemInstruction: { parts: [{ text: systemPrompt(petId, state) }] },
-        contents: [...contents, ...turns],
-        tools: TOOLS,
-        generationConfig: { temperature: 0.8 },
-      };
-
-      let parts = null;
-      let lastErr = null;
-      for (const m of model ? [model] : models) {
-        let gotText = false;
-        try {
-          const streamRes = await geminiStreamOnce(m, body, key, ac.signal, (t) => { gotText = true; emit('chat-chunk', { text: t }); });
-          parts = streamRes.parts;
-          if (streamRes.usage) finalUsage = streamRes.usage;
-          model = m;
-          break;
-        } catch (e) {
-          if (e.name === 'AbortError') throw e;
-          lastErr = e;
-          if (gotText || ![404, 429, 500, 503].includes(e.status)) break;
-        }
-      }
-      if (!parts) throw lastErr || new Error('Sem resposta do Gemini');
-      if (!parts.length) parts = [{ text: '' }];
-      turns.push({ role: 'model', parts });
-
-      const calls = parts.filter((p) => p.functionCall);
-      if (!calls.length) break;
-
-      const responses = [];
-      for (const c of calls) {
-        const callId = `${id}-${round}-${responses.length}`;
-        const result = await handleToolCall(sender, petId, id, callId, c.functionCall.name, c.functionCall.args || {});
-        responses.push({
-          functionResponse: {
-            name: c.functionCall.name,
-            ...(c.functionCall.id ? { id: c.functionCall.id } : {}),
-            response: result,
-          },
-        });
-      }
-      turns.push({ role: 'user', parts: responses });
-      emit('chat-continue');
-    }
-
-    const durationMs = Date.now() - startTime;
-    if (!finalUsage || !finalUsage.totalTokens) {
-      const promptChars = JSON.stringify(contents).length;
-      const outputChars = turns.reduce((acc, t) => acc + (t.parts || []).map((p) => p.text || '').join('').length, 0);
-      const promptTokens = Math.max(1, Math.round(promptChars / 3.8));
-      const completionTokens = Math.max(1, Math.round(outputChars / 3.8));
-      finalUsage = {
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
-        estimated: true,
-      };
-    }
-    emit('chat-done', { turns, model, usage: finalUsage, durationMs });
-  } catch (e) {
-    const durationMs = Date.now() - startTime;
-    if (e.name === 'AbortError') emit('chat-done', { turns, model, usage: finalUsage, durationMs, aborted: true });
-    else emit('chat-error', { message: friendlyGeminiError(e), status: e.status, quotaExceeded: e.status === 429, durationMs });
-  } finally {
-    controllers.delete(id);
-  }
-}
-
-// ---------- OpenAI (opcional, só se o usuário colocar uma chave para o Codexy) ----------
-async function openaiChat(sender, { petId, id, history }, key) {
-  const emit = (ch, data = {}) => { if (!sender.isDestroyed()) sender.send(ch, { petId, id, ...data }); };
-  const startTime = Date.now();
-  const ac = new AbortController();
-  ac.owner = sender;
-  ac.petId = petId;
-  controllers.set(id, ac);
-  let text = '';
-  let usage = null;
-  try {
-    const messages = trimHistory(history)
-      .map((m) => ({ role: m.role === 'model' ? 'assistant' : 'user', content: (m.parts || []).map((p) => p.text || '').join('') }))
-      .filter((m) => m.content);
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      signal: ac.signal,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: config.openaiModel || 'gpt-4o-mini',
-        stream: true,
-        stream_options: { include_usage: true },
-        messages: [{ role: 'system', content: systemPrompt(petId) }, ...messages],
-      }),
+    const contents = compactHistory(history);
+    const toolsEnabled = shouldOfferTools(contents);
+    const providers = createAIProviders({
+      fetchImpl: (...args) => fetch(...args),
+      handleToolCall: (name, args, context) => handleToolCall(sender, petId, id, context.callId, name, args),
     });
-    if (!res.ok) {
-      let msg = `Erro ${res.status}`;
-      try { const j = await res.json(); msg = j.error?.message || msg; } catch {}
-      emit('chat-error', { message: msg, status: res.status });
-      return;
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.usage) {
-            usage = {
-              promptTokens: parsed.usage.prompt_tokens || 0,
-              completionTokens: parsed.usage.completion_tokens || 0,
-              totalTokens: parsed.usage.total_tokens || 0,
-            };
-          }
-          const chunk = parsed.choices?.[0]?.delta?.content || '';
-          if (chunk) { text += chunk; emit('chat-chunk', { text: chunk }); }
-        } catch {}
-      }
-    }
+    const options = {
+      key, petId, id, history: contents,
+      systemPrompt: conciseSystemPrompt(petId, state, toolsEnabled, contents),
+      toolsEnabled, ...LIMITS, signal: controller.signal,
+      onText: (text) => emit('chat-chunk', { text }),
+      onContinue: () => emit('chat-continue'),
+    };
+    const result = provider === 'openai'
+      ? await providers.openaiChat({ ...options, model: config.openaiModel || 'gpt-4o-mini' })
+      : await providers.geminiChat({ ...options, models: [...new Set([config.geminiModel, ...GEMINI_MODELS].filter(Boolean))] });
+    sessionHistory.set(petId, [...history, ...result.turns].slice(-30));
+    emit('chat-done', { ...result, durationMs: Date.now() - startTime });
+  } catch (error) {
     const durationMs = Date.now() - startTime;
-    if (!usage) {
-      const promptChars = JSON.stringify(messages).length;
-      const promptTokens = Math.max(1, Math.round(promptChars / 3.8));
-      const completionTokens = Math.max(1, Math.round(text.length / 3.8));
-      usage = { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens, estimated: true };
-    }
-    emit('chat-done', { turns: [{ role: 'model', parts: [{ text }] }], model: 'openai', usage, durationMs });
-  } catch (e) {
-    const durationMs = Date.now() - startTime;
-    if (e.name === 'AbortError') emit('chat-done', { turns: [{ role: 'model', parts: [{ text }] }], usage, durationMs, aborted: true });
-    else emit('chat-error', { message: e.message, durationMs });
+    if (error.name === 'AbortError') emit('chat-done', { ...error.partial, durationMs, aborted: true });
+    else emit('chat-error', { message: error.message, status: error.status, quotaExceeded: error.status === 429, durationMs, usage: error.partial?.usage });
   } finally {
-    controllers.delete(id);
+    if (controllers.get(id) === controller) controllers.delete(id);
   }
 }
+
+const geminiChat = (sender, payload) => providerChat(sender, payload, 'gemini', geminiApiKey());
+const openaiChat = (sender, payload, key) => providerChat(sender, payload, 'openai', key);
 
 // ---------- Ferramentas: Codex e Antigravity ----------
-function friendlyCodexError(m) {
-  if (/usage limit/i.test(m)) {
-    const at = m.match(/try again at ([^.]+?)\.?$/i) || m.match(/try again at ([\d:]+ ?[AP]M)/i);
-    return `O Codex atingiu o limite de uso do seu plano do ChatGPT${at ? ` (libera às ${at[1]})` : ''}.`;
-  }
-  if (/not logged in|unauthorized|401/i.test(m)) return 'O Codex não está logado. Abra o app do Codex e entre com sua conta.';
-  return m;
-}
-
-function runCodex({ tarefa, pasta, writable }, onStatus, callId, owner) {
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    const exe = findCodexExe();
-    if (!exe) return resolve({ ok: false, text: 'Não achei o Codex instalado neste PC.', durationMs: Date.now() - startTime });
-    const cwd = pasta;
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gemi-codex-'));
-    const tmpOut = path.join(tmpDir, 'response.txt');
-    const args = ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '-s', writable ? 'workspace-write' : 'read-only', '-C', cwd, '-o', tmpOut, '--', String(tarefa || '')];
-
-    let child;
-    try {
-      child = spawn(exe, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    } catch (e) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      return resolve({ ok: false, text: e.message, durationMs: Date.now() - startTime });
-    }
-    child.owner = owner;
-    children.set(callId, child);
-
-    let buf = '', lastMsg = '', errMsg = '', stderr = '';
-    const timer = setTimeout(() => { errMsg = 'Tempo esgotado (10 min).'; try { child.kill(); } catch {} }, 10 * 60 * 1000);
-
-    child.stdout.on('data', (d) => {
-      buf += d.toString();
-      const lines = buf.split(/\r?\n/);
-      buf = lines.pop();
-      for (const line of lines) {
-        let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        if (ev.type === 'error') errMsg = ev.message || errMsg;
-        else if (ev.type === 'turn.failed') errMsg = ev.error?.message || errMsg;
-        else if (ev.item) {
-          const it = ev.item;
-          if (it.type === 'command_execution' && ev.type === 'item.started') onStatus(`⚙️ [${elapsed}s] ${String(it.command || '').slice(0, 90)}`);
-          else if (it.type === 'file_change') onStatus(`✏️ [${elapsed}s] editando arquivos…`);
-          else if (it.type === 'reasoning') onStatus(`🧠 [${elapsed}s] pensando…`);
-          else if (it.type === 'agent_message' && it.text) lastMsg = it.text;
-        }
-      }
-    });
-    child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4000); });
-    child.on('error', (e) => { errMsg = e.message; });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      children.delete(callId);
-      const durationMs = Date.now() - startTime;
-      try {
-        if (fs.existsSync(tmpOut)) {
-          const t = fs.readFileSync(tmpOut, 'utf8').trim();
-          if (t) lastMsg = t;
-          fs.unlinkSync(tmpOut);
-        }
-      } catch {}
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      if (code === 0 && lastMsg && !errMsg) return resolve({ ok: true, text: lastMsg, durationMs });
-      const m = errMsg || stderr.trim().split(/\r?\n/).filter((l) => !/Reading additional input/.test(l)).pop() || `O Codex saiu com código ${code}.`;
-      resolve({ ok: false, text: friendlyCodexError(m), durationMs });
-    });
-  });
-}
+const runCodex = createCodexRunner({
+  findExecutable: findCodexExe, spawnImpl: spawn,
+  onChildStarted: (callId, child, owner) => { child.owner = owner; children.set(callId, child); },
+  onChildFinished: (callId) => children.delete(callId),
+});
 
 function runAntigravity({ tarefa, pasta }) {
   const startTime = Date.now();
@@ -799,7 +482,8 @@ async function handleToolCall(sender, petId, id, callId, name, args) {
     onStatus: (text) => emit('tool-status', { text }), callId,
   });
   emit('tool-result', r);
-  return r.ok ? { resultado: r.text.slice(0, 6000) } : { erro: r.text };
+  const text = r.text.slice(0, LIMITS.toolOutputChars);
+  return r.ok ? { resultado: text, ...(r.text.length > text.length ? { truncated: true } : {}) } : { erro: text };
 }
 
 // ---------- IPC ----------

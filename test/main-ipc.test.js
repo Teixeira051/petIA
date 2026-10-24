@@ -15,12 +15,14 @@ const display = (id, x, width, height, scaleFactor = 1) => ({
   workArea: { x, y: 0, width, height: height - 40 },
 });
 
-function createMainFixture(t, config = {}) {
+function createMainFixture(t, config = {}, transport = {}) {
   const handlers = {};
   const created = [];
   const saved = [];
   const confirmations = [];
   const requests = [];
+  const spawned = [];
+  const responses = transport.responses ? [...transport.responses] : null;
   const errors = [];
   const timers = new Map();
   let nextTimer = 0;
@@ -79,7 +81,9 @@ function createMainFixture(t, config = {}) {
     dialog: {
       showMessageBox: async (parent, options) => {
         confirmations.push({ parent, options });
-        return { response: 0 };
+        const response = typeof transport.confirmationResponse === 'function'
+          ? await transport.confirmationResponse(parent, options) : transport.confirmationResponse ?? 0;
+        return { response };
       },
       showErrorBox: (_title, message) => errors.push(message),
     },
@@ -90,17 +94,24 @@ function createMainFixture(t, config = {}) {
       if (id === './lib/config-store') return { createConfigStore: () => ({ load: () => plain(config), save: (value) => saved.push(plain(value)) }) };
       if (id === './lib/logger') return { createLogger: () => () => {} };
       if (id === 'fs') return { ...fs, existsSync: () => false };
-      if (id === 'child_process') return { spawn: () => { throw new Error('Não execute processos no teste.'); }, execFile: () => {} };
+      if (id === 'child_process') return { spawn: (...args) => { spawned.push(args); throw new Error('Não execute processos no teste.'); }, execFile: () => {} };
       return require(id.startsWith('./') ? path.join(root, id) : id);
     },
-    fetch: (url, options) => new Promise((_resolve, reject) => {
-      requests.push({ url, signal: options.signal });
-      options.signal.addEventListener('abort', () => {
-        const error = new Error('Requisição de teste cancelada.');
-        error.name = 'AbortError';
-        reject(error);
-      }, { once: true });
-    }),
+    fetch: (url, options) => {
+      requests.push({ url, ...options, body: JSON.parse(options.body) });
+      if (typeof transport.fetchImpl === 'function') return transport.fetchImpl(url, options);
+      if (responses) {
+        assert.ok(responses.length, 'O processo principal tentou uma requisição extra.');
+        return Promise.resolve(responses.shift());
+      }
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('Requisição de teste cancelada.');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    },
     __dirname: root,
     process: { env: {}, pid: 123, platform: 'win32', on: () => {} },
     console, AbortController, Buffer,
@@ -116,7 +127,7 @@ function createMainFixture(t, config = {}) {
   const event = (window) => ({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
   const dispatch = (channel, window, value) => handlers[channel](event(window), value);
   return {
-    handlers, created, saved, confirmations, requests, event, dispatch,
+    handlers, created, saved, confirmations, requests, spawned, event, dispatch,
     window: (id) => created.findLast((window) => !window.destroyed && window.options.title.endsWith(`Monitor ${id}`)),
     quitCount: () => quitCount,
     changeDisplays(next, primary = primaryId) {
@@ -298,4 +309,112 @@ test('mover um pet cancela só seu chat mesmo quando outro chat pertence à mesm
   await codexChat;
   assert.deepEqual(plain((await fixture.dispatch('get-config', first)).viewport.visiblePetIds), ['codex']);
   assert.deepEqual(plain((await fixture.dispatch('get-config', fixture.window(2))).viewport.visiblePetIds), ['gemi']);
+});
+
+function streamingResponse(events) {
+  // Exercise the real provider parser through main IPC, including UTF-8 split
+  // across chunks, CRLF separators, and a final event without a newline.
+  const encoded = new TextEncoder().encode(events.map((event) => 'data: ' + (typeof event === 'string' ? event : JSON.stringify(event))).join('\r\n\r\n'));
+  return new Response(new ReadableStream({ start(controller) {
+    for (let index = 0; index < encoded.length; index += 3) controller.enqueue(encoded.slice(index, index + 3));
+    controller.close();
+  } }));
+}
+
+test('Gemini via IPC conversa sem tools, limita saída e não inclui estado desnecessário no prompt', async (t) => {
+  const fixture = createMainFixture(t, { apiKey: 'FAKE-GEMINI-TEST-KEY', geminiModel: 'test-gemini' }, { responses: [streamingResponse([
+    { candidates: [{ content: { parts: [{ text: 'Olá! Uma curiosidade 🦊.' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 3, thoughtsTokenCount: 2, cachedContentTokenCount: 4, totalTokenCount: 17 } },
+  ])] });
+  const first = fixture.window(1);
+  await fixture.dispatch('chat-send', first, {
+    petId: 'gemi', id: 'ordinary-gemini',
+    history: [{ role: 'user', parts: [{ text: 'Oi! Conte uma curiosidade sobre raposas.' }] }],
+    state: { food: 57, fun: 58, energy: 59 },
+  });
+  assert.equal(fixture.requests.length, 1);
+  const request = fixture.requests[0];
+  assert.match(request.url, /generativelanguage\.googleapis\.com.*test-gemini/u);
+  assert.equal(request.body.tools, undefined);
+  assert.equal(request.body.generationConfig.maxOutputTokens, 512);
+  assert.equal(request.headers['x-goog-api-key'], 'FAKE-GEMINI-TEST-KEY');
+  assert.doesNotMatch(request.body.systemInstruction.parts[0].text, /Estado atual|alimentação:|energia:/u);
+  const done = first.sent.find(({ channel }) => channel === 'chat-done');
+  assert.ok(done); assert.equal(done.data.text, 'Olá! Uma curiosidade 🦊.');
+  assert.equal(done.data.model, 'test-gemini'); assert.equal(done.data.usage.totalTokens, 17);
+  assert.equal(done.data.usage.thoughtsTokens, 2); assert.equal(done.data.usage.cachedTokens, 4);
+  assert.equal(fixture.confirmations.length, 0); assert.equal(fixture.spawned.length, 0);
+  assert.equal(first.sent.some(({ channel }) => channel === 'chat-error'), false);
+});
+
+test('OpenAI via IPC delega com confirmação nativa recusada e leva histórico completo ao outro monitor', async (t) => {
+  const fixture = createMainFixture(t, { openaiKey: 'FAKE-OPENAI-TEST-KEY', openaiModel: 'test-openai' }, {
+    confirmationResponse: () => 0,
+    responses: [
+      streamingResponse([
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'remote-provider-call', type: 'function', function: { name: 'chamar_codex', arguments: '{"tarefa":"liste ' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'os arquivos do projeto 🦊"}' } }] } }] },
+        { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        { choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, prompt_tokens_details: { cached_tokens: 3 }, completion_tokens_details: { reasoning_tokens: 2 } } }, '[DONE]',
+      ]),
+      streamingResponse([
+        { choices: [{ delta: { content: 'A tarefa foi cancelada; nenhum comando foi executado.' } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }] },
+        { choices: [], usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24, prompt_tokens_details: { cached_tokens: 7 }, completion_tokens_details: { reasoning_tokens: 1 } } }, '[DONE]',
+      ]),
+      streamingResponse([
+        { choices: [{ delta: { content: 'Continuamos a conversa na outra tela.' } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }] }, '[DONE]',
+      ]),
+    ],
+  });
+  const first = fixture.window(1);
+  const second = fixture.window(2);
+  const history = [{ role: 'user', parts: [{ text: 'session-openai-marker: chame o Codex para listar os arquivos do projeto.' }] }];
+  await fixture.dispatch('chat-send', second, { petId: 'codex', id: 'request-openai-delegation', history });
+  assert.equal(fixture.requests.length, 2);
+  assert.ok(fixture.requests.every(({ url }) => url === 'https://api.openai.com/v1/chat/completions'));
+  const firstBody = fixture.requests[0].body;
+  assert.equal(firstBody.model, 'test-openai'); assert.equal(firstBody.max_completion_tokens, 512);
+  assert.equal(firstBody.parallel_tool_calls, false);
+  assert.deepEqual(firstBody.tools.map((tool) => tool.function.name), ['chamar_codex', 'abrir_antigravity']);
+  assert.equal(fixture.confirmations.length, 1);
+  assert.equal(fixture.confirmations[0].parent, second);
+  assert.match(fixture.confirmations[0].options.detail, /liste os arquivos do projeto 🦊/u);
+  assert.equal(fixture.confirmations[0].options.defaultId, 0);
+  assert.equal(fixture.spawned.length, 0);
+  const requested = second.sent.find(({ channel }) => channel === 'tool-request');
+  assert.equal(requested.data.callId, 'request-openai-delegation-0-0');
+  assert.ok(second.sent.some(({ channel, data }) => channel === 'tool-result' && data.canceled));
+  assert.ok(second.sent.some(({ channel }) => channel === 'chat-continue'));
+  const messages = fixture.requests[1].body.messages;
+  assert.equal(messages.at(-2).role, 'assistant');
+  assert.equal(messages.at(-2).tool_calls[0].id, 'remote-provider-call');
+  assert.equal(messages.at(-1).role, 'tool');
+  assert.equal(messages.at(-1).tool_call_id, 'remote-provider-call');
+  assert.match(JSON.parse(messages.at(-1).content).erro, /Cancelado/u);
+  const done = second.sent.find(({ channel }) => channel === 'chat-done');
+  assert.ok(done); assert.equal(done.data.turns.length, 3);
+  assert.equal(done.data.usage.totalTokens, 39); assert.equal(done.data.usage.requests, 2);
+  assert.equal(done.data.usage.cachedTokens, 10); assert.equal(done.data.usage.reasoningTokens, 3);
+  assert.equal(second.sent.some(({ channel }) => channel === 'chat-error'), false);
+  const completeHistory = [...history, ...plain(done.data.turns)];
+  assert.deepEqual(plain((await fixture.dispatch('get-config', second)).viewport.histories.codex), completeHistory);
+
+  await fixture.dispatch('move-pet', second, { petId: 'codex', displayId: '1' });
+  const moved = await fixture.dispatch('get-config', first);
+  assert.deepEqual(plain(moved.viewport.histories.codex), completeHistory);
+  assert.equal(Object.hasOwn((await fixture.dispatch('get-config', second)).viewport.histories, 'codex'), false);
+  assert.equal(JSON.stringify(fixture.saved).includes('session-openai-marker'), false);
+  assert.ok(fixture.saved.every((saved) => !Object.hasOwn(saved, 'histories') && !Object.hasOwn(saved, 'sessionHistory')));
+
+  await fixture.dispatch('chat-send', first, {
+    petId: 'codex', id: 'request-openai-after-move',
+    history: [...completeHistory, { role: 'user', parts: [{ text: 'Obrigado! Conte uma curiosidade sobre gatos.' }] }],
+  });
+  assert.equal(fixture.requests.length, 3);
+  assert.equal(fixture.requests[2].body.tools, undefined);
+  assert.ok(fixture.requests[2].body.messages.some((message) => message.role === 'tool' && message.tool_call_id === 'remote-provider-call'));
+  assert.ok(first.sent.some(({ channel, data }) => channel === 'chat-done' && data.id === 'request-openai-after-move'));
+  assert.equal(second.sent.some(({ channel, data }) => channel === 'chat-done' && data.id === 'request-openai-after-move'), false);
+  assert.equal(fixture.confirmations.length, 1); assert.equal(fixture.spawned.length, 0);
 });

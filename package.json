@@ -1,6 +1,6 @@
 {
   "name": "gemi-pet",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Gemi Pets — Desktop pets com Gemini e OpenAI",
   "main": "main.js",
   "scripts": {

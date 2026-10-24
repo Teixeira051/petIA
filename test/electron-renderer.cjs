@@ -34,6 +34,11 @@ app.whenReady().then(async () => {
       const chat = await import('./chat.js');
       const skins = await import('./skins.js');
       const renderer = await import('./renderer.js');
+      const zeroUsage = renderer.formatUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, thoughtsTokens: 0, reasoningTokens: 0, requests: 1, estimated: false });
+      if (zeroUsage.tokensLabel !== '0' || zeroUsage.estimated || !zeroUsage.details.includes('0 ent.')) throw Error('Uso real zero virou estimativa');
+      const actualUsage = renderer.formatUsage({ promptTokens: 100, completionTokens: 20, totalTokens: 120, cachedTokens: 60, thoughtsTokens: 0, reasoningTokens: 4, requests: 2, estimated: false });
+      if (actualUsage.totalTokens !== 120 || !actualUsage.details.includes('cache 60') || !actualUsage.details.includes('2 chamadas')) throw Error('Contagem agregada ou cache incorretos');
+      if (renderer.formatUsage(null).summary !== 'Uso não informado' || !renderer.formatUsage({ totalTokens: 2, estimated: true }).tokensLabel.startsWith('~')) throw Error('Uso desconhecido/estimado não foi identificado');
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       await pause(300);
       if (typeof require !== 'undefined' || typeof process !== 'undefined') throw Error('Node exposto ao renderer');

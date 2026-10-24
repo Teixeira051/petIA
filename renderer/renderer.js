@@ -55,6 +55,50 @@ api.on('window-moving', () => {
 
 ['gemi', 'codex', 'claude', 'sparky'].forEach(setupChat);
 
+const tokenCount = (value) => Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+
+// Provider totals already include every request in this response. CLI usage is
+// rendered on its own card and is never added to the chat provider's counters.
+export function formatUsage(usage, fallbackText = null) {
+  const estimated = usage?.estimated === true || (!usage && fallbackText !== null);
+  const prefix = estimated ? '~' : '';
+  const promptTokens = tokenCount(usage?.promptTokens);
+  const completionTokens = tokenCount(usage?.completionTokens) ?? (!usage && fallbackText !== null ? Math.round(Array.from(fallbackText).length / 3.8) : null);
+  const totalTokens = tokenCount(usage?.totalTokens);
+  const outputOnly = !usage && fallbackText !== null;
+  const displayTokens = totalTokens ?? (outputOnly ? completionTokens : null);
+  const tokensLabel = displayTokens === null ? '—' : `${prefix}${displayTokens}`;
+  const summary = totalTokens !== null ? `${tokensLabel} total` : (outputOnly ? `${tokensLabel} saída` : 'Uso não informado');
+  const details = [];
+  if (promptTokens !== null) details.push(`${prefix}${promptTokens} ent.`);
+  if (completionTokens !== null && !outputOnly) details.push(`${prefix}${completionTokens} saída`);
+  const cachedTokens = tokenCount(usage?.cachedTokens);
+  if (cachedTokens !== null) details.push(`cache ${prefix}${cachedTokens}`);
+  const thoughtsTokens = tokenCount(usage?.thoughtsTokens);
+  const reasoningTokens = tokenCount(usage?.reasoningTokens);
+  if (thoughtsTokens !== null || reasoningTokens !== null) details.push(`raciocínio ${prefix}${(thoughtsTokens ?? 0) + (reasoningTokens ?? 0)}`);
+  const requests = tokenCount(usage?.requests);
+  if (requests !== null) details.push(`${requests} ${requests === 1 ? 'chamada' : 'chamadas'}`);
+  return { totalTokens, completionTokens, tokensLabel, summary, details, estimated, outputOnly };
+}
+
+function appendUsageChip(container, text, title = '', extraClass = '') {
+  const chip = document.createElement('span');
+  chip.className = `tele-badge-chip ${extraClass}`.trim();
+  chip.textContent = text;
+  if (title) chip.title = title;
+  container.appendChild(chip);
+}
+
+function makeUsageBadge(usage, fallbackText = null, source = 'Chat') {
+  const display = formatUsage(usage, fallbackText);
+  const badge = document.createElement('div');
+  badge.className = 'msg-telemetry-badge';
+  appendUsageChip(badge, `${source} · ${display.summary}`, display.outputOnly ? 'Estimativa apenas do texto de saída; entrada e total não foram informados.' : 'Total de tokens de todas as chamadas desta resposta. Cache e raciocínio são detalhamentos, não valores a somar ao total.');
+  for (const detail of display.details) appendUsageChip(badge, detail);
+  return badge;
+}
+
 api.on('chat-chunk', ({ petId, id, text }) => {
   const el = document.getElementById(id);
   if (!el) return;
@@ -65,23 +109,23 @@ api.on('chat-chunk', ({ petId, id, text }) => {
   bodyEl.innerHTML = renderMarkdown(el.dataset.raw);
 
   const rawLen = el.dataset.raw.length;
-  const estimatedTokens = Math.max(1, Math.round(rawLen / 3.8));
-  const elapsedSec = Math.max(0.1, (performance.now() - (chatState[petId]?.startTime || performance.now())) / 1000);
+  const estimatedTokens = Math.round(rawLen / 3.8);
+  const elapsedSec = Math.max(0.1, (performance.now() - (chatState[petId]?.startTime ?? performance.now())) / 1000);
   const speed = Math.round(estimatedTokens / elapsedSec);
 
   const liveEl = document.getElementById(`live-${id}`);
   if (liveEl) {
     const tokEl = liveEl.querySelector('.live-tok-counter');
-    if (tokEl) tokEl.textContent = `~${estimatedTokens} tok (${speed} t/s)`;
+    if (tokEl) tokEl.textContent = `~${estimatedTokens} saída (~${speed} t/s)`;
   }
 
   const els = getChatElements(petId);
-  if (els.valTokens) els.valTokens.textContent = estimatedTokens;
-  if (els.valSpeed) els.valSpeed.textContent = speed;
+  if (els.valTokens) { els.valTokens.textContent = `~${estimatedTokens}`; els.valTokens.title = 'Estimativa da saída enquanto a resposta chega.'; }
+  if (els.valSpeed) els.valSpeed.textContent = `~${speed}`;
   els.log.scrollTop = els.log.scrollHeight;
 });
 
-api.on('chat-done', ({ petId, id, turns, model, usage, durationMs, aborted }) => {
+api.on('chat-done', ({ petId, id, turns, model, usage, durationMs, aborted, finishReason }) => {
   chatState[petId].streaming = null;
   if (!aborted && Array.isArray(turns)) chatState[petId].history.push(...turns);
   chatState[petId].history = chatState[petId].history.slice(-30);
@@ -103,29 +147,24 @@ api.on('chat-done', ({ petId, id, turns, model, usage, durationMs, aborted }) =>
       bodyEl.innerHTML = renderMarkdown(el.dataset.raw);
     }
 
-    // Calcula telemetria final (tempo, tokens e velocidade)
-    const totalMs = durationMs || (performance.now() - (chatState[petId]?.startTime || performance.now()));
+    const totalMs = durationMs ?? Math.max(0, performance.now() - (chatState[petId]?.startTime ?? performance.now()));
     const durationSec = (totalMs / 1000).toFixed(1) + 's';
-    const totalTok = usage?.totalTokens || Math.max(1, Math.round((el.dataset.raw || '').length / 3.8));
-    const promptTok = usage?.promptTokens || Math.round(totalTok * 0.35);
-    const compTok = usage?.completionTokens || Math.round(totalTok * 0.65);
-    const speed = Math.round(compTok / Math.max(0.1, totalMs / 1000));
+    const display = formatUsage(usage, el.dataset.raw ?? '');
+    const speed = display.completionTokens === null ? '—' : `${display.estimated ? '~' : ''}${Math.round(display.completionTokens / Math.max(0.1, totalMs / 1000))}`;
 
     // Atualiza barra de telemetria no cabeçalho
-    if (els.valTokens) els.valTokens.textContent = totalTok;
+    if (els.valTokens) { els.valTokens.textContent = display.tokensLabel; els.valTokens.title = display.outputOnly ? 'Estimativa da saída; total não informado.' : 'Total de todas as chamadas desta resposta.'; }
     if (els.valTime) els.valTime.textContent = durationSec;
     if (els.valSpeed) els.valSpeed.textContent = speed;
-    els.status.textContent = `${model || 'Gemini'} • Concluído (${durationSec})`;
+    const responseLimited = !aborted && ['MAX_TOKENS', 'length'].includes(finishReason);
+    els.status.textContent = `${model || 'IA'} • ${aborted ? 'Interrompido' : (responseLimited ? 'Limite da resposta' : 'Concluído')} (${durationSec})`;
 
     // Adiciona badge de telemetria no rodapé da mensagem
-    const metaBadge = document.createElement('div');
-    metaBadge.className = 'msg-telemetry-badge';
-    metaBadge.innerHTML = `
-      <span class="tele-badge-chip" title="Tokens utilizados">🪙 <strong>${totalTok}</strong> tok <small>(${promptTok} in • ${compTok} out)</small></span>
-      <span class="tele-badge-chip" title="Tempo total da resposta">⏱️ <strong>${durationSec}</strong></span>
-      <span class="tele-badge-chip" title="Velocidade de geração">⚡ <strong>${speed}</strong> tok/s</span>
-      <span class="tele-badge-chip model-tag" title="Modelo">🤖 ${esc(model || 'gemini-flash')}</span>
-    `;
+    const metaBadge = makeUsageBadge(usage, el.dataset.raw ?? '');
+    if (responseLimited) appendUsageChip(metaBadge, 'Peça para continuar', 'A resposta atingiu o limite de saída. Envie uma nova mensagem se quiser continuar.');
+    appendUsageChip(metaBadge, `⏱️ ${durationSec}`, 'Tempo total, incluindo espera por ferramentas.');
+    appendUsageChip(metaBadge, `⚡ ${speed} tok/s`, 'Saída dividida pelo tempo total da resposta.');
+    appendUsageChip(metaBadge, `🤖 ${model || 'IA'}`, 'Modelo', 'model-tag');
     el.appendChild(metaBadge);
     els.log.scrollTop = els.log.scrollHeight;
   }
@@ -139,7 +178,7 @@ api.on('chat-done', ({ petId, id, turns, model, usage, durationMs, aborted }) =>
   }
 });
 
-api.on('chat-error', ({ petId, id, message, durationMs }) => {
+api.on('chat-error', ({ petId, id, message, durationMs, usage, providerUsage }) => {
   chatState[petId].streaming = null;
   if (chatState[petId]?.timerId) {
     clearInterval(chatState[petId].timerId);
@@ -150,10 +189,11 @@ api.on('chat-error', ({ petId, id, message, durationMs }) => {
   const els = getChatElements(petId);
   if (els.telemetry) els.telemetry.classList.remove('live');
 
-  const durStr = durationMs ? ` (${(durationMs / 1000).toFixed(1)}s)` : '';
+  const durStr = durationMs !== undefined && durationMs !== null ? ` Tempo decorrido: ${(durationMs / 1000).toFixed(1)}s.` : '';
   const errMsg = document.createElement('div');
   errMsg.className = 'msg model error';
-  errMsg.innerHTML = `⚠️ ${renderMarkdown(message || 'Erro na comunicação com a IA.')} <small style="display:block;margin-top:4px;color:var(--muted)">Tempo decorrido: ${durStr || '0.5s'}. Use <strong>⚡ Codex</strong> ou <strong>🚀 Argon</strong> para solicitar uma tarefa local com confirmação.</small>`;
+  errMsg.innerHTML = `⚠️ ${renderMarkdown(message || 'Erro na comunicação com a IA.')} <small style="display:block;margin-top:4px;color:var(--muted)">${durStr} Use <strong>⚡ Codex</strong> ou <strong>🚀 Argon</strong> para solicitar uma tarefa local com confirmação.</small>`;
+  if (usage ?? providerUsage) errMsg.appendChild(makeUsageBadge(usage ?? providerUsage, null, 'Chat parcial'));
 
   els.log.appendChild(errMsg);
   els.log.scrollTop = els.log.scrollHeight;
@@ -161,10 +201,12 @@ api.on('chat-error', ({ petId, id, message, durationMs }) => {
 });
 
 api.on('tool-request', ({ petId, callId, name, args }) => {
-  if (document.getElementById('card-' + callId)) return;
+  const existing = document.getElementById('card-' + callId);
+  if (existing) { existing.dataset.toolName = name; return; }
   const card = document.createElement('div');
   card.className = 'msg tool-card';
   card.id = 'card-' + callId;
+  card.dataset.toolName = name;
   card.innerHTML = '<strong>' + (name === 'chamar_codex' ? '⚡ Codex' : '🚀 Antigravity') + '</strong>' +
     '<div class="tool-task-box"><strong>Tarefa:</strong> ' + esc(args?.tarefa) + '</div>' +
     '<div class="tool-status-text">Aguardando confirmação na janela do Windows…</div><div class="tool-output hidden"></div>';
@@ -184,7 +226,7 @@ api.on('tool-status', ({ text, callId }) => {
   }
 });
 
-api.on('tool-result', ({ ok, text, canceled, callId, durationMs }) => {
+api.on('tool-result', ({ ok, text, canceled, callId, durationMs, usage }) => {
   const card = callId ? document.getElementById(`card-${callId}`) : null;
   if (card) {
     if (card._timer) {
@@ -193,13 +235,21 @@ api.on('tool-result', ({ ok, text, canceled, callId, durationMs }) => {
     }
     const spinner = card.querySelector('.tool-spinner');
     if (spinner) spinner.remove();
-    const durStr = durationMs ? ` em ${(durationMs / 1000).toFixed(1)}s` : '';
+    const durStr = durationMs !== undefined && durationMs !== null ? ` em ${(durationMs / 1000).toFixed(1)}s` : '';
     const st = card.querySelector('.tool-status-text');
     if (st) st.textContent = ok ? `✓ Concluído com sucesso${durStr}` : (canceled ? '✕ Cancelado' : `⚠ Erro na execução${durStr}`);
     const out = card.querySelector('.tool-output');
     if (out && text) {
       out.textContent = text;
       out.classList.remove('hidden');
+    }
+    const oldUsage = card.querySelector('.tool-usage');
+    if (oldUsage) oldUsage.remove();
+    const isCodex = card.dataset.toolName === 'chamar_codex' || card.classList.contains('codex');
+    if (usage || (isCodex && !canceled)) {
+      const badge = makeUsageBadge(usage, null, isCodex ? 'Codex CLI' : 'Ferramenta');
+      badge.classList.add('tool-usage');
+      card.appendChild(badge);
     }
   }
   SoundSystem.receive();
