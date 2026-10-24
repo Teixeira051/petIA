@@ -3,8 +3,9 @@ import { SoundSystem, syncAudioUI } from './sounds.js';
 import { applyPetCount, burstHearts, confetti, currentExpr, drawBubble, drawFood, drawParticles, drawShadow, dropFood, foundPet, goSleep, notes, say, setState, startPetHide, startRun, updateDialogue, updateFood, updateParticles, updatePet, wake } from './pets.js';
 import { drawPet, rr } from './skins.js';
 import { startDance, startHideSeek, startJokenpo, startKeepUp, startTag, startVolley, stopCurrentGame, updateDance, updateJokenpo, updateKeepUp, updateTag, updateVolley } from './games.js';
-import { closePetChat, esc, getChatElements, openPetChat, renderMarkdown, setupChat } from './chat.js';
+import { closePetChat, esc, getChatElements, openPetChat, renderMarkdown, setupChat, uiIcon } from './chat.js';
 import { hideHud, overPet, positionUI, updateBars, updateHit } from './ui.js';
+import { refreshPortraits } from './portraits.js';
 
 window.onerror = (msg, url, line, col, error) => {
   console.error(`[Renderer Window Error] ${msg} (${line}:${col})`, error);
@@ -12,7 +13,7 @@ window.onerror = (msg, url, line, col, error) => {
 
 resize();
 
-window.addEventListener('resize', resize);
+window.addEventListener('resize', () => { resize(); refreshPortraits(); });
 
 // Inicializa os pets só após receber a atribuição de monitor.
 
@@ -162,9 +163,9 @@ api.on('chat-done', ({ petId, id, turns, model, usage, durationMs, aborted, fini
     // Adiciona badge de telemetria no rodapé da mensagem
     const metaBadge = makeUsageBadge(usage, el.dataset.raw ?? '');
     if (responseLimited) appendUsageChip(metaBadge, 'Peça para continuar', 'A resposta atingiu o limite de saída. Envie uma nova mensagem se quiser continuar.');
-    appendUsageChip(metaBadge, `⏱️ ${durationSec}`, 'Tempo total, incluindo espera por ferramentas.');
-    appendUsageChip(metaBadge, `⚡ ${speed} tok/s`, 'Saída dividida pelo tempo total da resposta.');
-    appendUsageChip(metaBadge, `🤖 ${model || 'IA'}`, 'Modelo', 'model-tag');
+    appendUsageChip(metaBadge, durationSec, 'Tempo total, incluindo espera por ferramentas.');
+    appendUsageChip(metaBadge, `${speed} tok/s`, 'Saída dividida pelo tempo total da resposta.');
+    appendUsageChip(metaBadge, model || 'IA', 'Modelo', 'model-tag');
     el.appendChild(metaBadge);
     els.log.scrollTop = els.log.scrollHeight;
   }
@@ -205,9 +206,10 @@ api.on('tool-request', ({ petId, callId, name, args }) => {
   if (existing) { existing.dataset.toolName = name; return; }
   const card = document.createElement('div');
   card.className = 'msg tool-card';
+  card.classList.toggle('argon', name === 'abrir_antigravity');
   card.id = 'card-' + callId;
   card.dataset.toolName = name;
-  card.innerHTML = '<strong>' + (name === 'chamar_codex' ? '⚡ Codex' : '🚀 Antigravity') + '</strong>' +
+  card.innerHTML = '<div class="tool-card-head"><div class="tool-card-brand"><span class="tool-logo">' + uiIcon(name === 'chamar_codex' ? 'code' : 'rocket') + '</span><strong>' + (name === 'chamar_codex' ? 'Codex' : 'Argon') + '</strong></div></div>' +
     '<div class="tool-task-box"><strong>Tarefa:</strong> ' + esc(args?.tarefa) + '</div>' +
     '<div class="tool-status-text">Aguardando confirmação na janela do Windows…</div><div class="tool-output hidden"></div>';
   getChatElements(petId).log.appendChild(card);
@@ -349,6 +351,7 @@ $('#btn-skin-picker').addEventListener('click', () => {
     btn.classList.toggle('active', btn.dataset.skin === world.activeModalPet.skin);
   });
   skinModal.classList.remove('hidden');
+  refreshPortraits();
 });
 
 $('#btn-close-skin').addEventListener('click', () => { SoundSystem.pop(); skinModal.classList.add('hidden'); });
@@ -359,6 +362,7 @@ $$('.skin-opt').forEach((btn) => {
     SoundSystem.pop();
     const skin = btn.dataset.skin;
     world.activeModalPet.skin = skin;
+    refreshPortraits();
     api.setSkin(world.activeModalPet.id, skin);
     $('#hud-skin-name').textContent = SKIN_NAMES[skin] || 'Skin';
     world.activeModalPet.squash = 0.2;
@@ -682,6 +686,7 @@ export function acceptViewport(viewport) {
   if (moveButton) { moveButton.hidden = (viewport.displays?.length || 1) < 2; moveButton.classList.toggle('hidden', moveButton.hidden); }
   const displayInfo = $('#hud-display-info');
   if (displayInfo) { displayInfo.hidden = false; displayInfo.classList.remove('hidden'); displayInfo.textContent = viewport.label + ' · ' + viewport.resolution.width + ' × ' + viewport.resolution.height + ' · ' + Math.round(viewport.scaleFactor * 100) + '%'; }
+  refreshPortraits();
 }
 
 api.on('viewport', acceptViewport);
@@ -716,6 +721,7 @@ $('#act-monitor')?.addEventListener('click', async () => {
     if (cfg.settings?.sound !== undefined) SoundSystem.setEnabled(cfg.settings.sound);
     if (cfg.settings?.volume !== undefined) SoundSystem.setVolume(cfg.settings.volume);
     syncAudioUI();
+    refreshPortraits();
   } catch {}
 
   api.on('settings', (s) => {

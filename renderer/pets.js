@@ -1,4 +1,4 @@
-import { $$, ALL_CHARACTERS, CODEX_PALETTE, DIALOGUES, EMOJI, FONT, GEM_PALETTE, api, chatPetY, chatPositions, clamp, ctx, getPetPalette, getPetX, ground, mouse, particles, pets, pick, rand, world } from './core.js';
+import { $$, ALL_CHARACTERS, DIALOGUES, EMOJI, FONT, GEM_PALETTE, api, chatPetY, chatPositions, clamp, ctx, getPetPalette, getPetX, ground, mouse, particles, pets, pick, rand, world } from './core.js';
 import { fitPanel, getPetSlot, wrapBubbleText } from './layout.js';
 import { SoundSystem } from './sounds.js';
 import { rr, starPath } from './skins.js';
@@ -559,20 +559,17 @@ export function drawBubble(p) {
   const box = fitPanel({ width: world.W, height: world.H }, { width: w, height: h }, { x: p.x - w / 2, y: p.y - 74 - h, margin: 6 });
   const bx = box.left, by = box.top;
   ctx.globalAlpha = clamp(p.sayT / 300, 0, 1);
-  ctx.fillStyle = 'rgba(15,17,30,0.92)';
+  ctx.fillStyle = '#fffdf7';
   rr(ctx, bx, by, w, h, 12); ctx.fill();
   const inset = Math.min(14, w / 2);
   const tx = clamp(p.x, bx + inset, bx + w - inset);
   ctx.beginPath(); ctx.moveTo(tx - 6, by + h); ctx.lineTo(tx, by + h + 6); ctx.lineTo(tx + 6, by + h); ctx.fill();
 
-  const isGem = p.theme === 'gemini';
-  const colors = isGem ? GEM_PALETTE : CODEX_PALETTE;
-  const sg = ctx.createLinearGradient(bx, by, bx + w, by + h);
-  sg.addColorStop(0, colors[0]); sg.addColorStop(1, colors[1]);
-  ctx.strokeStyle = sg; ctx.lineWidth = 1.2;
+  const accents = { gemini: '#8c7bd6', codex: '#4c9d81', claude: '#bd835e', sparky: '#ad7eac' };
+  ctx.strokeStyle = accents[p.theme] || accents.gemini; ctx.lineWidth = 1.2;
   rr(ctx, bx, by, w, h, 12); ctx.stroke();
 
-  ctx.fillStyle = '#eaedff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#34313e'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   lines.forEach((line, index) => ctx.fillText(line, bx + w / 2, by + 15 + index * 18));
   ctx.textBaseline = 'alphabetic'; ctx.globalAlpha = 1;
 }

@@ -3,6 +3,13 @@ import { SoundSystem, syncAudioUI } from './sounds.js';
 import { foundPet, say, setState, sparkles, wake } from './pets.js';
 import { stopCurrentGame } from './games.js';
 import { hideHud } from './ui.js';
+import { paintPortrait } from './portraits.js';
+
+const ICONS = new Set(['chat', 'idea', 'code', 'rocket', 'clock', 'key', 'tokens', 'bolt', 'spark', 'heart', 'arrow']);
+
+export function uiIcon(name) {
+  return ICONS.has(name) ? `<svg class="ui-icon" aria-hidden="true"><use href="#icon-${name}"></use></svg>` : '';
+}
 
 export function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -48,34 +55,41 @@ export function showWelcomeChat(petId) {
   const { log } = getChatElements(petId);
   const def = ALL_CHARACTERS.find(c => c.id === petId) || ALL_CHARACTERS[0];
   const name = def.name;
-  const avatar = def.emoji;
+  const greetings = {
+    gemi: ['Oi, que bom te ver.', 'Uma boa conversa ou uma ideia nova? Estou por aqui para te acompanhar.'],
+    codex: ['Vamos fazer acontecer?', 'Da primeira ideia ao próximo passo. Conte comigo para pensar e criar com você.'],
+    claude: ['O que vamos descobrir?', 'Traga sua curiosidade. A gente pode explorar uma ideia, trocar histórias ou só conversar.'],
+    sparky: ['Uma faísca de ideia?', 'Vamos dar espaço para a criatividade. Estou aqui para imaginar e construir com você.'],
+  };
+  const [greeting, description] = greetings[petId] || greetings.gemi;
+  const actions = [
+    { icon: 'chat', label: 'Vamos conversar', caption: 'Uma pergunta ou um bom papo.', prompt: 'O que você gosta de fazer?' },
+    { icon: 'idea', label: 'Uma ideia nova', caption: 'Inspiração para o seu dia.', prompt: 'Me dê uma ideia criativa para um projeto.' },
+    { icon: 'code', label: 'Chamar o Codex', caption: 'Ajuda para fazer acontecer.', tool: 'codex' },
+    { icon: 'rocket', label: 'Abrir o Argon', caption: 'Continue no seu editor.', tool: 'argon' },
+  ];
 
   const welcome = document.createElement('div');
   welcome.className = 'chat-welcome';
   welcome.innerHTML = `
-    <span class="welcome-avatar">${avatar}</span>
-    <h3>Oi, eu sou o ${name}!</h3>
-    <p class="welcome-desc">Uma ideia, uma pergunta ou só um papo. Estou por aqui. Para tarefas no computador, use <strong>Codex</strong> ou <strong>Argon</strong> — você confirma antes de executar.</p>
-    <div class="chat-chips">
-      <button type="button" class="chip">💡 O que você sabe fazer?</button>
-      <button type="button" class="chip">😂 Me conta uma piada dev</button>
-      <button type="button" class="chip">⚡ Chamar Codex</button>
-      <button type="button" class="chip">🚀 Chamar Argon</button>
-      <button type="button" class="chip">🍎 Como está sua energia?</button>
+    <div class="welcome-avatar"><canvas class="pet-portrait" data-pet-portrait="${esc(petId)}" width="96" height="96" aria-hidden="true"></canvas><span class="welcome-spark">${uiIcon('spark')}</span></div>
+    <span class="welcome-kicker">Seu momento com ${esc(name)}</span>
+    <h3 class="welcome-title">${greeting}</h3>
+    <p class="welcome-desc">${description}</p>
+    <div class="chat-chips welcome-actions">
+      ${actions.map((action) => `<button type="button" class="chip" ${action.tool ? `data-tool="${action.tool}"` : `data-prompt="${esc(action.prompt)}"`}><span class="chip-icon">${uiIcon(action.icon)}</span><span class="chip-copy"><strong class="chip-label">${action.label}</strong><small class="chip-caption">${action.caption}</small></span></button>`).join('')}
     </div>
   `;
   log.appendChild(welcome);
+  paintPortrait(welcome.querySelector('canvas'), pets.find((pet) => pet.id === petId) || petId);
 
   welcome.querySelectorAll('.chip').forEach((btn) => {
     btn.addEventListener('click', () => {
-      SoundSystem.pop();
-      const txt = btn.textContent.replace(/^[\p{Emoji}\s]+/u, '').trim();
-      if (txt.includes('Codex')) {
-        handleToolButtonClick(petId, 'codex');
-      } else if (txt.includes('Argon')) {
-        handleToolButtonClick(petId, 'argon');
+      if (['codex', 'argon'].includes(btn.dataset.tool)) {
+        handleToolButtonClick(petId, btn.dataset.tool);
       } else {
-        sendChatMessage(petId, txt);
+        SoundSystem.pop();
+        sendChatMessage(petId, btn.dataset.prompt);
       }
     });
   });
@@ -99,7 +113,7 @@ export function executeToolDirect(petId, toolName, task) {
   task = task || 'Ajude com o código do projeto atual';
   const els = getChatElements(petId);
   const isCodex = toolName === 'chamar_codex';
-  const brand = isCodex ? 'Codex (OpenAI)' : 'Argon (Antigravity IDE)';
+  const brand = isCodex ? 'Codex' : 'Argon';
   const callId = `direct-${crypto.randomUUID()}`;
   const startTime = performance.now();
 
@@ -111,17 +125,17 @@ export function executeToolDirect(petId, toolName, task) {
   card.innerHTML = `
     <div class="tool-card-head">
       <div class="tool-card-brand">
-        <span>${isCodex ? '⚡' : '🚀'}</span>
+        <span class="tool-logo">${uiIcon(isCodex ? 'code' : 'rocket')}</span>
         <strong>${brand}</strong>
       </div>
-      <div class="tele-badge-chip" id="timer-${callId}">⏱️ <strong class="elapsed-val">0.0s</strong></div>
+      <div class="tele-badge-chip" id="timer-${callId}">${uiIcon('clock')} <strong class="elapsed-val">0.0s</strong></div>
     </div>
     <div class="tool-task-box">
       <strong>Tarefa:</strong> <code>${esc(task)}</code>
     </div>
     <div class="tool-status-row">
       <div class="tool-spinner"></div>
-      <span class="tool-status-text">Aguardando sua confirmação na janela do Windows…</span>
+      <span class="tool-status-text">Confirme a tarefa para continuar.</span>
     </div>
     <div class="tool-output hidden"></div>
   `;
@@ -187,6 +201,7 @@ export function openPetChat(petId) {
 export function closePetChat(petId, immediate = false) {
   const els = getChatElements(petId);
   if (els.root) els.root.classList.remove('open');
+  if (els.root?.contains(document.activeElement)) document.activeElement.blur();
   const pet = pets.find((p) => p.id === petId);
   if (pet && pet.state === 'chat') {
     setState(pet, 'idle', 60);
@@ -238,7 +253,7 @@ export function sendChatMessage(petId, text) {
     els.setup.classList.remove('hidden');
     const warnMsg = document.createElement('div');
     warnMsg.className = 'msg model error';
-    warnMsg.innerHTML = '🔑 <strong>Chave do Gemini necessária:</strong> Cole sua chave do Google Gemini acima para conversar. Você pode gerar uma grátis no Google AI Studio!';
+    warnMsg.innerHTML = `${uiIcon('key')} <strong>Vamos conectar?</strong> Adicione sua chave do Gemini acima para começar a conversa.`;
     els.log.appendChild(warnMsg);
     els.log.scrollTop = els.log.scrollHeight;
     return;
@@ -254,7 +269,7 @@ export function sendChatMessage(petId, text) {
   const liveBadge = document.createElement('div');
   liveBadge.className = 'tele-live-badge';
   liveBadge.id = `live-${streamId}`;
-  liveBadge.innerHTML = `⏱️ <strong class="live-stopwatch">0.0s</strong> • <span class="live-tok-counter">conectando…</span>`;
+  liveBadge.innerHTML = `${uiIcon('clock')} <strong class="live-stopwatch">0.0s</strong> <span class="live-tok-counter">conectando…</span>`;
   modelMsg.appendChild(liveBadge);
 
   const textBody = document.createElement('div');

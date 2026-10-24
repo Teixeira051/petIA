@@ -1,14 +1,20 @@
 import { $, $$, ALL_CHARACTERS, SKIN_NAMES, api, chatPositions, cvs, getChatLayout, ground, hud, mouse, pets, scoreEl, world } from './core.js';
 import { fitPanel } from './layout.js';
+import { paintPortrait } from './portraits.js';
 
 export function showHud(pet) {
   if (pet.state === 'chat' || world.activeGame || world.dragPet) return;
   world.hoveredPet = pet;
   updateBars(pet);
 
-  const icons = { gemi: '✨', codex: '⚡', claude: '🦊', sparky: '🌟' };
-  $('#hud-pet-icon').textContent = icons[pet.id] || '✨';
+  const portrait = $('#hud-pet-icon canvas');
+  if (portrait) {
+    portrait.dataset.petPortrait = pet.id;
+    paintPortrait(portrait, pet);
+  }
   $('#hud-pet-name').textContent = pet.name;
+  const subtitles = { gemi: 'Uma boa ideia começa aqui.', codex: 'Seu parceiro para o próximo passo.', claude: 'Curioso por natureza.', sparky: 'Uma faísca de criatividade.' };
+  $('#hud-pet-subtitle').textContent = pet.state === 'sleep' ? 'Recarregando para novas aventuras.' : subtitles[pet.id] || 'Sempre por perto.';
   $('#hud-skin-name').textContent = SKIN_NAMES[pet.skin] || 'Skin';
   hud.classList.toggle('codex-theme', pet.theme === 'codex');
   hud.classList.toggle('claude-theme', pet.theme === 'claude');
@@ -17,7 +23,9 @@ export function showHud(pet) {
 
   // Atualiza botões de contagem no HUD
   $$('.btn-pet-count').forEach((b) => {
-    b.classList.toggle('active', Number(b.dataset.count) === world.activePetCount);
+    const active = Number(b.dataset.count) === world.activePetCount;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-pressed', String(active));
   });
 
   hud.classList.add('show');
@@ -31,14 +39,24 @@ export function hideHud() {
 export function updateBars(pet) {
   for (const k of ['food', 'fun', 'energy']) {
     const el = $(`#bar-${k}`);
-    el.style.width = `${Math.round(pet.stats[k])}%`;
+    const value = Math.max(0, Math.min(100, Math.round(Number(pet.stats[k]) || 0)));
+    el.style.width = `${value}%`;
     el.classList.toggle('low', pet.stats[k] < 25);
+    $(`#value-${k}`).textContent = `${value}%`;
+    const meter = el.closest('.stat');
+    meter.setAttribute('aria-valuenow', String(value));
+    meter.setAttribute('aria-valuetext', `${value}%`);
   }
 }
 
 export function updateSleepBtn() {
   if (!world.hoveredPet) return;
-  $('#act-sleep-label').textContent = world.hoveredPet.state === 'sleep' ? 'Acordar' : 'Dormir';
+  const sleeping = world.hoveredPet.state === 'sleep';
+  $('#act-sleep-label').textContent = sleeping ? 'Acordar' : 'Dormir';
+  $('#act-sleep-icon use').setAttribute('href', sleeping ? '#icon-sun' : '#icon-moon');
+  const button = $('#act-sleep');
+  button.title = sleeping ? 'Acordar o pet' : 'Tirar uma soneca';
+  button.setAttribute('aria-label', button.title);
 }
 
 export function setIgnore(b) {

@@ -22,7 +22,7 @@ Com duas telas e dois pets, cada tela recebe um pet por padrão. Eles não são 
 
 Jogos reúnem os pets na tela em que foram iniciados. O estado, a skin e o histórico concluído da conversa acompanham o pet nas transferências. O histórico fica apenas na memória durante a sessão; respostas e tarefas em andamento são canceladas quando a tela que as solicitou é removida ou o pet é transferido. É possível abrir o app em telas pequenas: chat, HUD, menus e balões ajustam seus limites ao espaço disponível.
 
-O visual usa painéis com cores de cada personagem, melhor contraste, foco visível, indicações de teclado e respeito à preferência de reduzir animações. A área do desktop continua transparente.
+O visual combina painéis claros em tom de papel, cabeçalhos azul-marinho e cores de cada personagem. O chat tem atalhos com descrições, campo de mensagem destacado e cards de tarefa organizados. O painel do pet mostra seus cuidados com rótulos e valores, acesso principal à conversa e controles de equipe, aparência e monitor. Os retratos e as opções de aparência usam o mesmo desenho do pet na área de trabalho e são redesenhados somente quando a aparência ou a densidade da tela muda. Foco visível, indicações de teclado e a preferência de reduzir animações são respeitados. A área do desktop continua transparente.
 
 ## Personagens e provedores
 
@@ -76,6 +76,7 @@ Leia a tarefa e a pasta antes de aprovar. Conteúdo colado ou respostas do model
 - `npm run lint`: ESLint em todo o JavaScript.
 - `npm test`: testes de provedores com respostas simuladas, streaming fragmentado, delegação, limites, métricas, histórico, migração de chaves, IPC, confirmação nativa, cancelamento, pastas e rotação de log. Não chama APIs pagas nem a CLI real.
 - `npm run test:renderer`: abre uma janela oculta e temporária do Electron, exercita os módulos, seis jogos, seis skins, chat e o cofre real. Não acessa sua configuração nem chama APIs pagas ou agentes locais.
+- `npm run test:design`: verifica os painéis reais do Electron em diferentes tamanhos e escalas, incluindo chat longo, configuração de chave, menus e retratos. Para salvar prévias locais, execute `node scripts/test-design.js CAMINHO_DA_PASTA`.
 - `npm run check`: executa todas as verificações anteriores.
 - `npm run build:native`: compila o monitor de janelas e o gerador de ícone a partir dos fontes C#.
 - `npm run dist`: compila os auxiliares e gera `dist/Gemi Pets.exe`.

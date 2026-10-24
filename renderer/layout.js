@@ -40,8 +40,8 @@ export function getChatLayout(viewport, anchorX) {
   // Keep the pet above its panel on ordinary screens; very short windows give
   // priority to a usable, scrollable conversation instead of a negative top.
   const petSpace = Math.min(90, Math.max(margin, view.height - 240 - margin));
-  const width = Math.min(408, view.width - margin * 2);
-  const height = Math.min(520, Math.max(1, view.height - petSpace - margin));
+  const width = Math.min(438, view.width - margin * 2);
+  const height = Math.min(568, Math.max(1, view.height - petSpace - margin));
   const centerX = clampCenter(anchorX, view.width, width / 2 + margin);
   const panel = fitPanel(view, { width, height }, { x: centerX - width / 2, y: view.height - height - margin, margin });
   return { ...panel, centerX: panel.left + panel.width / 2, petY: within(panel.top - 10, Math.min(72, view.height - 1), Math.max(0, view.height - 1)) };

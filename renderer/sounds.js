@@ -104,13 +104,17 @@ export const SoundSystem = (() => {
 
 export function syncAudioUI() {
   const on = SoundSystem.isEnabled();
-  const icon = on ? '🔊' : '🔇';
+  const icon = `<svg class="ui-icon" aria-hidden="true"><use href="#icon-sound${on ? '' : '-off'}"></use></svg>`;
   const hudIcon = $('#hud-sound-icon');
-  if (hudIcon) hudIcon.textContent = icon;
+  if (hudIcon) hudIcon.innerHTML = icon;
   const actSoundLbl = $('#act-sound-label');
   if (actSoundLbl) actSoundLbl.textContent = on ? 'Som' : 'Mudo';
   $$('.btn-sound').forEach((b) => {
-    b.textContent = icon;
+    b.innerHTML = icon;
     b.title = on ? 'Silenciar sons' : 'Ativar sons';
+    b.setAttribute('aria-label', b.title);
+    b.setAttribute('aria-pressed', String(on));
   });
+  const action = $('#act-sound');
+  if (action) { action.setAttribute('aria-label', on ? 'Silenciar sons' : 'Ativar sons'); action.setAttribute('aria-pressed', String(on)); }
 }

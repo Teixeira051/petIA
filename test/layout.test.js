@@ -28,8 +28,8 @@ test('chats ficam dentro de cada monitor ao mudar resolução e posição do pet
     }
   }
   const desktop = getChatLayout({ width: 1920, height: 700 }, 1840);
-  assert.equal(desktop.width, 408);
-  assert.equal(desktop.height, 520);
+  assert.equal(desktop.width, 438);
+  assert.equal(desktop.height, 568);
   assert.ok(desktop.top - 10 >= 72, 'O pet inteiro deve caber acima do chat no desktop');
   const short = getChatLayout({ width: 800, height: 480 }, 790);
   assert.ok(short.height < desktop.height, 'A altura reduzida deve diminuir o painel em vez de esconder seu cabeçalho');
